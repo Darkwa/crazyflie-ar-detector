@@ -151,7 +151,25 @@ static bool readDetectorParameters(string filename, aruco::DetectorParameters &p
     return true;
 }
 
+/**
+  *Make a copy of the object passed in parameter.
+ */
+static Vec<double, 3> copy(Vec<double, 3> val){
+	Vec<double, 3> res = Vec<double, 3>(val[0], val[1], val[2]);
+	return res;
+}
 
+/**
+  *Substarct each value of a 3d vector to the correponding value of another,
+  *and return the resulting vector.
+  *Operation : val1 - val2
+ */
+static Vec<double, 3> substract(Vec<double, 3> val1, Vec<double, 3> val2){
+	for(int i=0; i<3; i++){
+		val1[i] = val1[i] - val2[i];
+	}
+	return val1;
+}
 
 /**
  */
@@ -266,7 +284,7 @@ int main(int argc, char *argv[]) {
     }
 
     inputVideo.set(CV_CAP_PROP_FOURCC,CV_FOURCC('Y','C','Y','V'));
-    inputVideo.set(CAP_PROP_FPS, 30);
+    inputVideo.set(CAP_PROP_FPS, 60);
     inputVideo.set(CAP_PROP_FRAME_WIDTH,640);
     inputVideo.set(CAP_PROP_FRAME_HEIGHT,480);
 
@@ -281,7 +299,7 @@ int main(int argc, char *argv[]) {
 
         vector< int > ids;
         vector< vector< Point2f > > corners, rejected;
-        vector< Mat > rvecs, tvecs;
+        vector< Vec3d > rvecs, tvecs;
 
         // detect markers and estimate pose
         aruco::detectMarkers(image, dictionary, corners, ids, detectorParams, rejected);
@@ -330,10 +348,11 @@ int main(int argc, char *argv[]) {
         if(key == 27) break;
 
 
-        Mat ground = Mat::zeros(3, 1, CV_64F);
+        //Mat ground = Mat::zeros(3, 1, CV_64F);
         Mat groundRot = Mat::zeros(3, 3, CV_64F);
-        Mat copter = Mat::zeros(3, 1, CV_64F);
-
+        //Mat copter = Mat::zeros(3, 1, CV_64F);
+	Vec<double, 3> ground = Vec<double, 3>((double)0, (double)0, (double)0);
+	Vec<double, 3> copter = Vec<double, 3>((double)0, (double)0, (double)0);
         int detect = 0;
 
         char buffer[255];
@@ -343,9 +362,9 @@ int main(int argc, char *argv[]) {
           angle = atan2((corners[0][0].y-corners[0][2].y), (corners[0][2].x-corners[0][0].x))*180/M_PI;
           angle += 45;
 
-          pos_x = tvecs[0].at<double>(0);
-          pos_y = tvecs[0].at<double>(1);
-          pos_z = tvecs[0].at<double>(2);
+          pos_x = tvecs[0][0];//pos_x = tvecs[0].at<double>(0);
+          pos_y = tvecs[0][1];//pos_y = tvecs[0].at<double>(1);
+          pos_z = tvecs[0][2];//pos_z = tvecs[0].at<double>(2);
 
           if (fromTop) {
             //pos_x = pos_x;
@@ -372,18 +391,18 @@ int main(int argc, char *argv[]) {
         // Calulate difference between ground and copter
         for (int i=0; i<ids.size(); i++) {
           if (ids[i] == 0) {
-            cx = tvecs[i].at<double>(0);
-            cy = tvecs[i].at<double>(1);
-            cz = tvecs[i].at<double>(2);
+            cx = tvecs[i][0];//cx = tvecs[i].at<double>(0);
+            cy = tvecs[i][1];//cy = tvecs[i].at<double>(1);
+            cz = tvecs[i][2];//cz = tvecs[i].at<double>(2);
             printf("%f\t%f\t%f\n", cx, cy, cz);
-            copter = tvecs[i].clone();
+            copter = copy(tvecs[i]);//copter = tvecs[i].clone();
             detect ++;
           } else if (ids[i] == 1) {
-            gx = tvecs[i].at<double>(0);
-            gy = tvecs[i].at<double>(1);
-            gz = tvecs[i].at<double>(2);
+            gx = tvecs[i][0];//gx = tvecs[i].at<double>(0);
+            gy = tvecs[i][1];//gy = tvecs[i].at<double>(1);
+            gz = tvecs[i][2];//gz = tvecs[i].at<double>(2);
             printf("%f\t%f\t%f\n", gx, gy, gz);
-            ground = tvecs[i].clone();
+            ground = copy(tvecs[i]);//ground = tvecs[i].clone();
             Rodrigues(rvecs[i], groundRot);
 
             detect ++;
@@ -391,9 +410,11 @@ int main(int argc, char *argv[]) {
         }
 
         if (detect >= 2) {
-          Mat diff = copter - ground;
-          cout << diff << endl;
-          diff = groundRot * diff;
+	  Vec<double, 3> diff = substract(copter, ground);
+	  cout << diff[0] << '|' << diff[1] << '|' << diff[2] << endl;
+          //Mat diff = copter - ground;
+          //cout << diff << endl;
+          //diff = groundRot * diff;
         }
 
     }
