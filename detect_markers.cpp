@@ -46,6 +46,14 @@ the use of this software, even if advised of the possibility of such damage.
 
 #include <zmq.h>
 
+#include <opencv2/core/utility.hpp>
+#include <opencv2/tracking.hpp>
+#include <opencv2/videoio.hpp>
+#include <cstring>
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+//#include "precomp.hpp"
 using namespace std;
 using namespace cv;
 
@@ -85,6 +93,42 @@ static void help() {
 }
 
 
+static void printCorner(Mat _image, std::vector<cv::Point2f> corners, int wantedCorner, Scalar color){
+	if(wantedCorner < corners.size()){
+		//cout << "Position of the corner : " << currentCorner[1] << "\n";
+		rectangle(_image, corners[wantedCorner] - Point2f(5, 5),
+				corners[wantedCorner] + Point2f(5, 5), color,
+				1, LINE_AA);
+	}
+	else{
+		cout << "printCorner : error, wantedCorner > corners.size()\n";
+	}
+}
+
+static void printCenter(InputOutputArray _image, InputArray _camMatrix, InputArray _distCoeffs, InputArray _rvec, InputArray _tvec, float _markerLength, Scalar _color){
+	vector< Point3f > axisPoints;
+	axisPoints.push_back(Point3f(0, 0, 0));
+	axisPoints.push_back(Point3f(_markerLength * 0.5f, 0, 0));
+	axisPoints.push_back(Point3f(0, _markerLength * 0.5f, 0));
+	axisPoints.push_back(Point3f(0, 0, _markerLength * 0.5f));
+	vector< Point2f > imagePoints;
+	projectPoints(axisPoints, _rvec, _tvec, _camMatrix, _distCoeffs, imagePoints);
+	//cout << "CENTRE : " << imagePoints[0] << "\n";
+	rectangle(_image, imagePoints[0] - Point2f(10, 10),
+			imagePoints[0] + Point2f(10, 10), Scalar(247,0 ,255),
+			1, LINE_AA);
+}
+
+static vector< Point2f > getCenter(InputOutputArray _image, InputArray _camMatrix, InputArray _distCoeffs, InputArray _rvec, InputArray _tvec, float _markerLength){
+	vector< Point3f > axisPoints;
+	axisPoints.push_back(Point3f(0, 0, 0));
+	axisPoints.push_back(Point3f(_markerLength * 0.5f, 0, 0));
+	axisPoints.push_back(Point3f(0, _markerLength * 0.5f, 0));
+	axisPoints.push_back(Point3f(0, 0, _markerLength * 0.5f));
+	vector< Point2f > imagePoints;
+	projectPoints(axisPoints, _rvec, _tvec, _camMatrix, _distCoeffs, imagePoints);
+	return imagePoints[0];
+}
 
 /**
  */
@@ -174,6 +218,22 @@ static Vec<double, 3> substract(Vec<double, 3> val1, Vec<double, 3> val2){
 /**
  */
 int main(int argc, char *argv[]) {
+
+	/**
+	 *Initialization for tracker
+	 */
+	// declares all required variables
+	//! [vars]
+	Rect2d roi;
+	Mat frame;
+	//! [vars]
+
+	// create a tracker object
+	//! [create]
+	Ptr<Tracker> tracker = Tracker::create( "KCF" );
+	//! [create]
+
+
 	FileStorage conf = NULL;
 	bool has_conf = false;
 	int marker_id = 0;
@@ -290,7 +350,8 @@ int main(int argc, char *argv[]) {
 
 	double totalTime = 0;
 	int totalIterations = 0;
-
+	bool initialized = false;
+	bool ready = false;
 	while(inputVideo.grab()) {
 		Mat image, imageCopy;
 		inputVideo.retrieve(image);
@@ -313,11 +374,20 @@ int main(int argc, char *argv[]) {
 		totalIterations++;
 		if(totalIterations % 30 == 0) {
 			cout << "Detection Time = " << currentTime * 1000 << " ms "
-					<< "(Mean = " << 1000 * totalTime / double(totalIterations) << " ms)" << endl;
+					<< "(Mean = " << 1000 * totalTime / double(totalIterations)
+					<< " ms)" << endl;
 		}
 
 		// draw results
 		image.copyTo(imageCopy);
+
+		//draw the position of a corner and the center of a marker
+		if(ids.size() > 0) {
+			printCorner(imageCopy, corners[0], 3, Scalar(0, 255, 0));
+			printCenter(imageCopy, camMatrix, distCoeffs, rvecs[0], tvecs[0],
+					markerLength, Scalar(247,0 ,255));
+		}
+
 		if(ids.size() > 0) {
 			aruco::drawDetectedMarkers(imageCopy, corners, ids);
 
@@ -341,7 +411,25 @@ int main(int argc, char *argv[]) {
 			str << "Fps:" << fps;
 			putText(imageCopy, str.str(), Point(10,30), CV_FONT_HERSHEY_PLAIN, 3, Scalar(0,0,250));
 		}
+		/**********************************
+		 *       MOTION TRACKING           *
+		 **********************************/
+		if(ready == true){
+			tracker ->init(image,roi);
+			initialized=true;
+			ready=false;
+			printf("Initialized");
+		}
+		if(initialized==true){
+			// update the tracking result
+			//! [update]
+			tracker->update(image,roi);
+			//! [update]
 
+			//! [visualization]
+			// draw the tracked object
+			rectangle( imageCopy, roi, Scalar( 255, 0, 0 ), 2, 1 );	
+		}
 
 		imshow("out", imageCopy);
 		char key = (char)waitKey(waitTime);
@@ -375,7 +463,13 @@ int main(int argc, char *argv[]) {
 
 			printf("Detected marker %d: %f, %f, %f, %f\n", ids[0], pos_x, pos_y, pos_z, angle);
 			sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": true}", pos_x, pos_y, pos_z, angle);
+			//Sending the previously calculated datas : pos_x/y/z and angle
 			zmq_send(controller, buffer, strlen(buffer), ZMQ_DONTWAIT);
+			//MOTION TRACKING INITIALIZATION
+			if(initialized==false){
+				roi = Rect2d(100.0f,100.0f, 150.0f, 150.0f);
+				ready = true;
+			}
 
 			if (haslog) {
 				logfile << pos_x << ", " << pos_y << ", " << pos_z << ", " << angle << endl;
@@ -416,7 +510,6 @@ int main(int argc, char *argv[]) {
 			//cout << diff << endl;
 			//diff = groundRot * diff;
 		}
-
 	}
 
 	if (haslog) {
