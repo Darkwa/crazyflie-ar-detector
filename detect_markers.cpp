@@ -119,7 +119,7 @@ static void printCenter(InputOutputArray _image, InputArray _camMatrix, InputArr
 			1, LINE_AA);
 }
 
-static vector< Point2f > getCenter(InputOutputArray _image, InputArray _camMatrix, InputArray _distCoeffs, InputArray _rvec, InputArray _tvec, float _markerLength){
+static Point2f getCenter(InputArray _camMatrix, InputArray _distCoeffs, InputArray _rvec, InputArray _tvec, float _markerLength){
 	vector< Point3f > axisPoints;
 	axisPoints.push_back(Point3f(0, 0, 0));
 	axisPoints.push_back(Point3f(_markerLength * 0.5f, 0, 0));
@@ -128,6 +128,20 @@ static vector< Point2f > getCenter(InputOutputArray _image, InputArray _camMatri
 	vector< Point2f > imagePoints;
 	projectPoints(axisPoints, _rvec, _tvec, _camMatrix, _distCoeffs, imagePoints);
 	return imagePoints[0];
+}
+
+static Point2f calculateWandH(std::vector<cv::Point2f> corners){
+	float maxX = corners[0].x;
+	float minX = corners[0].x;
+	float maxY = corners[0].y;
+	float minY = corners[0].y;
+	for(int i = 1; i < corners.size(); i++){
+		maxX = max(maxX, corners[i].x);
+		minX = min(minX, corners[i].x);
+		maxY = max(maxY, corners[i].y);
+		minY = min(minY, corners[i].y);
+	}
+	return Point2f((maxX-minX), (maxY-minY));
 }
 
 /**
@@ -428,7 +442,7 @@ int main(int argc, char *argv[]) {
 
 			//! [visualization]
 			// draw the tracked object
-			rectangle( imageCopy, roi, Scalar( 255, 0, 0 ), 2, 1 );	
+			rectangle( imageCopy, roi, Scalar( 255, 0, 0 ), 2, 1 );
 		}
 
 		imshow("out", imageCopy);
@@ -467,7 +481,9 @@ int main(int argc, char *argv[]) {
 			zmq_send(controller, buffer, strlen(buffer), ZMQ_DONTWAIT);
 			//MOTION TRACKING INITIALIZATION
 			if(initialized==false){
-				roi = Rect2d(100.0f,100.0f, 150.0f, 150.0f);
+				Point2f centerPosition = getCenter(camMatrix, distCoeffs, rvecs[0], tvecs[0], markerLength);
+				Point2f size = calculateWandH(corners[0]);
+				roi = Rect2d(centerPosition.x-size.x/2,centerPosition.y-size.y/2, roundf(size.x), roundf(size.y));
 				ready = true;
 			}
 
