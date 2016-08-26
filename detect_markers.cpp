@@ -53,7 +53,7 @@ the use of this software, even if advised of the possibility of such damage.
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
-//#include "precomp.hpp"
+
 using namespace std;
 using namespace cv;
 
@@ -152,7 +152,6 @@ static bool isParam(string param, int argc, char **argv) {
 	return false;
 }
 
-
 /**
  */
 static string getParam(string param, int argc, char **argv, string defvalue = "") {
@@ -165,8 +164,6 @@ static string getParam(string param, int argc, char **argv, string defvalue = ""
 		return argv[idx + 1];
 }
 
-
-
 /**
  */
 static bool readCameraParameters(string filename, Mat &camMatrix, Mat &distCoeffs) {
@@ -177,8 +174,6 @@ static bool readCameraParameters(string filename, Mat &camMatrix, Mat &distCoeff
 	fs["distortion_coefficients"] >> distCoeffs;
 	return true;
 }
-
-
 
 /**
  */
@@ -233,21 +228,6 @@ static Vec<double, 3> substract(Vec<double, 3> val1, Vec<double, 3> val2){
  */
 int main(int argc, char *argv[]) {
 
-	/**
-	 *Initialization for tracker
-	 */
-	// declares all required variables
-	//! [vars]
-	Rect2d roi;
-	Mat frame;
-	//! [vars]
-
-	// create a tracker object
-	//! [create]
-	Ptr<Tracker> tracker = Tracker::create( "KCF" );
-	//! [create]
-
-
 	FileStorage conf = NULL;
 	bool has_conf = false;
 	int marker_id = 0;
@@ -260,6 +240,11 @@ int main(int argc, char *argv[]) {
 
 	bool fromTop = false;
 	if (isParam("-t", argc, argv)) fromTop = true;
+
+	//Initializing tracker
+	Rect2d roi, workingROI;
+	Mat frame;
+	Ptr<Tracker> tracker = Tracker::create( "KCF" );
 
 	// Initializing ZMQ
 	void *ctx = zmq_ctx_new();
@@ -364,8 +349,10 @@ int main(int argc, char *argv[]) {
 
 	double totalTime = 0;
 	int totalIterations = 0;
+
 	bool initialized = false;
 	bool ready = false;
+
 	while(inputVideo.grab()) {
 		Mat image, imageCopy;
 		inputVideo.retrieve(image);
@@ -426,10 +413,12 @@ int main(int argc, char *argv[]) {
 			putText(imageCopy, str.str(), Point(10,30), CV_FONT_HERSHEY_PLAIN, 3, Scalar(0,0,250));
 		}
 		/**********************************
-		 *       MOTION TRACKING           *
-		 **********************************/
+		*       MOTION TRACKING           *
+		**********************************/
 		if(ready == true){
-			tracker ->init(image,roi);
+			tracker = Tracker::create( "KCF" );
+			workingROI = roi;
+			tracker ->init(image,workingROI);
 			initialized=true;
 			ready=false;
 			printf("Initialized");
@@ -479,13 +468,12 @@ int main(int argc, char *argv[]) {
 			sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": true}", pos_x, pos_y, pos_z, angle);
 			//Sending the previously calculated datas : pos_x/y/z and angle
 			zmq_send(controller, buffer, strlen(buffer), ZMQ_DONTWAIT);
+
 			//MOTION TRACKING INITIALIZATION
-			if(initialized==false){
-				Point2f centerPosition = getCenter(camMatrix, distCoeffs, rvecs[0], tvecs[0], markerLength);
-				Point2f size = calculateWandH(corners[0]);
-				roi = Rect2d(centerPosition.x-size.x/2,centerPosition.y-size.y/2, roundf(size.x), roundf(size.y));
-				ready = true;
-			}
+			Point2f centerPosition = getCenter(camMatrix, distCoeffs, rvecs[0], tvecs[0], markerLength);
+			Point2f size = calculateWandH(corners[0]);
+			roi = Rect2d(centerPosition.x-size.x*2.0/2.0,centerPosition.y-size.y*2.0/2.0, roundf(size.x*2.0), roundf(size.y*2.0));
+			ready = true;
 
 			if (haslog) {
 				logfile << pos_x << ", " << pos_y << ", " << pos_z << ", " << angle << endl;
