@@ -245,6 +245,10 @@ int main(int argc, char *argv[]) {
 	Rect2d roi, workingROI;
 	Mat frame;
 	Ptr<Tracker> tracker = Tracker::create( "KCF" );
+	Point2f trackedBox, centeredTrackedBox, prvs_trackedBox, coeffs;
+	Point3f prvs_pos;
+	bool firstPass = true;
+	float lostMarkerTimeStamp, actualTime;
 
 	// Initializing ZMQ
 	void *ctx = zmq_ctx_new();
@@ -338,12 +342,12 @@ int main(int argc, char *argv[]) {
 	bool haslog = false;
 	if (isParam("-L", argc, argv)) {
 		logfile.open(getParam("-L", argc, argv).c_str());
-		logfile << "x, y, z, angle" << endl;
+		logfile << "x, y, z, angle, mode, timestamp" << endl;
 		haslog = true;
 	}
 
-	inputVideo.set(CV_CAP_PROP_FOURCC,CV_FOURCC('Y','C','Y','V'));
-	inputVideo.set(CAP_PROP_FPS, 30);
+	inputVideo.set(CV_CAP_PROP_FOURCC,CV_FOURCC('Y','U','Y','V')); //'Y','C','Y','V'
+	inputVideo.set(CAP_PROP_FPS, 60);
 	inputVideo.set(CAP_PROP_FRAME_WIDTH,640);
 	inputVideo.set(CAP_PROP_FRAME_HEIGHT,480);
 
@@ -384,9 +388,9 @@ int main(int argc, char *argv[]) {
 
 		//draw the position of a corner and the center of a marker
 		if(ids.size() > 0) {
-			printCorner(imageCopy, corners[0], 3, Scalar(0, 255, 0));
-			printCenter(imageCopy, camMatrix, distCoeffs, rvecs[0], tvecs[0],
-					markerLength, Scalar(247,0 ,255));
+			//printCorner(imageCopy, corners[0], 3, Scalar(0, 255, 0));
+			//printCenter(imageCopy, camMatrix, distCoeffs, rvecs[0], tvecs[0],
+			//		markerLength, Scalar(247,0 ,255));
 		}
 
 		if(ids.size() > 0) {
@@ -421,7 +425,6 @@ int main(int argc, char *argv[]) {
 			tracker ->init(image,workingROI);
 			initialized=true;
 			ready=false;
-			printf("Initialized");
 		}
 		if(initialized==true){
 			// update the tracking result
@@ -432,6 +435,15 @@ int main(int argc, char *argv[]) {
 			//! [visualization]
 			// draw the tracked object
 			rectangle( imageCopy, roi, Scalar( 255, 0, 0 ), 2, 1 );
+
+			//TODO : find center and store x and y values
+			prvs_trackedBox = Point2f(trackedBox);
+			trackedBox = Point2f(roi.x+roi.height/2.0, roi.y+roi.width/2.0);
+
+			//TODO : temporary tracing the box
+			rectangle(imageCopy, trackedBox - Point2f(5, 5),
+							trackedBox + Point2f(5, 5), Scalar(247,0 ,255),
+							1, LINE_AA);
 		}
 
 		imshow("out", imageCopy);
@@ -453,6 +465,7 @@ int main(int argc, char *argv[]) {
 			angle = atan2((corners[0][0].y-corners[0][2].y), (corners[0][2].x-corners[0][0].x))*180/M_PI;
 			angle += 45;
 
+			prvs_pos = Point3f(pos_x, pos_y, pos_z);
 			pos_x = tvecs[0][0];//pos_x = tvecs[0].at<double>(0);
 			pos_y = tvecs[0][1];//pos_y = tvecs[0].at<double>(1);
 			pos_z = tvecs[0][2];//pos_z = tvecs[0].at<double>(2);
@@ -474,15 +487,35 @@ int main(int argc, char *argv[]) {
 			Point2f size = calculateWandH(corners[0]);
 			roi = Rect2d(centerPosition.x-size.x*2.0/2.0,centerPosition.y-size.y*2.0/2.0, roundf(size.x*2.0), roundf(size.y*2.0));
 			ready = true;
+			firstPass = true;
 
 			if (haslog) {
-				logfile << pos_x << ", " << pos_y << ", " << pos_z << ", " << angle << endl;
+				logfile << pos_x << ", " << pos_y << ", " << pos_z << ", " << angle << ", marker, 0" << endl;
 			}
 		} else {
-			sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": false}", pos_x, pos_y, pos_z, angle);
+			if (firstPass == true) {
+				coeffs = Point2f((prvs_trackedBox.x-320.0)/prvs_pos.x, (prvs_trackedBox.y-240.0)/prvs_pos.y);
+				lostMarkerTimeStamp = getTickCount()/(getTickFrequency()); //time in second
+				firstPass = false;
+			}
+			actualTime = getTickCount()/(getTickFrequency());
+			centeredTrackedBox = Point2f((trackedBox.x-320.0)/coeffs.x, (trackedBox.y-240.0)/coeffs.y);
+			if(actualTime - lostMarkerTimeStamp < 10){
+				printf("Tracked zone :     %f, %f, %f, %f\n", centeredTrackedBox.x, centeredTrackedBox.y, pos_z, angle);
+				sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": true}", centeredTrackedBox.x, centeredTrackedBox.y, pos_z, angle);
+			}
+			else{
+				printf("Quad not detected during the previous 10 seconds\n");
+				sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": false}", centeredTrackedBox.x, centeredTrackedBox.y, pos_z, angle);
+			}
 			zmq_send(controller, buffer, strlen(buffer), ZMQ_DONTWAIT);
 			if (haslog) {
-				logfile << "0, 0, 0, 0" << endl;
+				if(actualTime - lostMarkerTimeStamp < 10){
+					logfile << centeredTrackedBox.x << ", " << centeredTrackedBox.y << ", " << pos_z << ", " << angle << ", motion, " << actualTime - lostMarkerTimeStamp << endl;
+				}
+				else{
+					logfile << "0, 0, 0, 0, stop, " << actualTime - lostMarkerTimeStamp << endl;
+				}
 			}
 		}
 
@@ -492,14 +525,14 @@ int main(int argc, char *argv[]) {
 				cx = tvecs[i][0];//cx = tvecs[i].at<double>(0);
 				cy = tvecs[i][1];//cy = tvecs[i].at<double>(1);
 				cz = tvecs[i][2];//cz = tvecs[i].at<double>(2);
-				printf("%f\t%f\t%f\n", cx, cy, cz);
+				//printf("%f\t%f\t%f\n", cx, cy, cz);
 				copter = copy(tvecs[i]);//copter = tvecs[i].clone();
 				detect ++;
 			} else if (ids[i] == 1) {
 				gx = tvecs[i][0];//gx = tvecs[i].at<double>(0);
 				gy = tvecs[i][1];//gy = tvecs[i].at<double>(1);
 				gz = tvecs[i][2];//gz = tvecs[i].at<double>(2);
-				printf("%f\t%f\t%f\n", gx, gy, gz);
+				//printf("%f\t%f\t%f\n", gx, gy, gz);
 				ground = copy(tvecs[i]);//ground = tvecs[i].clone();
 				Rodrigues(rvecs[i], groundRot);
 
