@@ -1,6 +1,6 @@
 %YAML:1.0
 #camera_name: "Microsoft® LifeCam VX-2000"
-camera_calib: "calibration_microsoft_vx2000.yml"   # Path is relative to this file location
+camera_calib: "calib_ps3_eye_blue_fov.yml" #"calibration_microsoft_vx2000.yml"   # Path is relative to this file location
 
 # Marker to be tracked
 marker_dictionary: 0

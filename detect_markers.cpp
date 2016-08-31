@@ -346,7 +346,7 @@ int main(int argc, char *argv[]) {
 		haslog = true;
 	}
 
-	inputVideo.set(CV_CAP_PROP_FOURCC,CV_FOURCC('Y','U','Y','V')); //'Y','C','Y','V'
+	inputVideo.set(CV_CAP_PROP_FOURCC,CV_FOURCC('Y','U','Y','V')); //'Y','C','Y','V' Depends on the webcam used
 	inputVideo.set(CAP_PROP_FPS, 60);
 	inputVideo.set(CAP_PROP_FRAME_WIDTH,640);
 	inputVideo.set(CAP_PROP_FRAME_HEIGHT,480);
