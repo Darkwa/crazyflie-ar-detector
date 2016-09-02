@@ -1,30 +1,23 @@
-/*
+/**
 By downloading, copying, installing or using the software you agree to this
 license. If you do not agree to this license, do not download, install,
 copy or use the software.
-
                           License Agreement
                For Open Source Computer Vision Library
                        (3-clause BSD License)
-
 Copyright (C) 2013, OpenCV Foundation, all rights reserved.
 Copyright (C) 2015, Bitcraze AB
 Third party copyrights are property of their respective owners.
-
 Redistribution and use in source and binary forms, with or without modification,
 are permitted provided that the following conditions are met:
-
  * Redistributions of source code must retain the above copyright notice,
     this list of conditions and the following disclaimer.
-
  * Redistributions in binary form must reproduce the above copyright notice,
     this list of conditions and the following disclaimer in the documentation
     and/or other materials provided with the distribution.
-
  * Neither the names of the copyright holders nor the names of the contributors
     may be used to endorse or promote products derived from this software
     without specific prior written permission.
-
 This software is provided by the copyright holders and contributors "as is" and
 any express or implied warranties, including, but not limited to, the implied
 warranties of merchantability and fitness for a particular purpose are
@@ -236,21 +229,22 @@ int main(int argc, char *argv[]) {
 	float frameTime = 0;
 
 	float pos_x = 0, pos_y = 0, pos_z = 0;
-	float prvs_pos_x=0, prvs_pos_y=0, prvs_pos_z=0;
 	float angle = 0;
 
 	bool fromTop = false;
 	if (isParam("-t", argc, argv)) fromTop = true;
 
+	bool useMotionTracking = false;
+	if(isParam("-M", argc, argv)) useMotionTracking = true;
+
 	//Initializing tracker
-	bool var = true;
 	Rect2d roi, workingROI;
 	Mat frame;
 	Ptr<Tracker> tracker = Tracker::create( "KCF" );
 	Point2f trackedBox, centeredTrackedBox, prvs_trackedBox, coeffs;
 	Point3f prvs_pos;
-	bool firstPass = true, marker = false, position = false, first_detection = true;
-	float lostMarkerTimeStamp = 0.0, actualTime = 0.0;
+	bool firstPass = true;
+	float lostMarkerTimeStamp, actualTime;
 
 	// Initializing ZMQ
 	void *ctx = zmq_ctx_new();
@@ -368,7 +362,7 @@ int main(int argc, char *argv[]) {
 		vector< int > ids;
 		vector< vector< Point2f > > corners, rejected;
 		vector< Vec3d > rvecs, tvecs;
-		
+
 		// detect markers and estimate pose
 		aruco::detectMarkers(image, dictionary, corners, ids, detectorParams, rejected);
 		if(estimatePose && ids.size() > 0) {
@@ -419,33 +413,35 @@ int main(int argc, char *argv[]) {
 			putText(imageCopy, str.str(), Point(10,30), CV_FONT_HERSHEY_PLAIN, 3, Scalar(0,0,250));
 		}
 		/**********************************
-		*       MOTION TRACKING           *
-		**********************************/
-		if(ready == true){
-			tracker = Tracker::create( "KCF" );
-			workingROI = roi;
-			tracker ->init(image,workingROI);
-			initialized=true;
-			ready=false;
-		}
-		if(initialized==true){
-			// update the tracking result
-			//! [update]
-			tracker->update(image,roi);
-			//! [update]
+		 *       MOTION TRACKING           *
+		 **********************************/
+		if(useMotionTracking){
+			if(ready == true){
+				tracker = Tracker::create( "KCF" );
+				workingROI = roi;
+				tracker ->init(image,workingROI);
+				initialized=true;
+				ready=false;
+			}
+			if(initialized==true){
+				// update the tracking result
+				//! [update]
+				tracker->update(image,roi);
+				//! [update]
 
-			//! [visualization]
-			// draw the tracked object
-			rectangle( imageCopy, roi, Scalar( 255, 0, 0 ), 2, 1 );
+				//! [visualization]
+				// draw the tracked object
+				rectangle( imageCopy, roi, Scalar( 255, 0, 0 ), 2, 1 );
 
-			//TODO : find center and store x and y values
-			prvs_trackedBox = Point2f(trackedBox);
-			trackedBox = Point2f(roi.x+roi.height/2.0, roi.y+roi.width/2.0);
+				//TODO : find center and store x and y values
+				prvs_trackedBox = Point2f(trackedBox);
+				trackedBox = Point2f(roi.x+roi.height/2.0, roi.y+roi.width/2.0);
 
-			//TODO : temporary tracing the box
-			rectangle(imageCopy, trackedBox - Point2f(5, 5),
-							trackedBox + Point2f(5, 5), Scalar(247,0 ,255),
-							1, LINE_AA);
+				//TODO : temporary tracing the box
+				rectangle(imageCopy, trackedBox - Point2f(5, 5),
+						trackedBox + Point2f(5, 5), Scalar(247,0 ,255),
+						1, LINE_AA);
+			}
 		}
 
 		imshow("out", imageCopy);
@@ -467,9 +463,10 @@ int main(int argc, char *argv[]) {
 			angle = atan2((corners[0][0].y-corners[0][2].y), (corners[0][2].x-corners[0][0].x))*180/M_PI;
 			angle += 45;
 
-			pos_x = tvecs[0][0];//pos_x = tvecs[0].at<double>(0);
-			pos_y = tvecs[0][1];//pos_y = tvecs[0].at<double>(1);
-			pos_z = tvecs[0][2];//pos_z = tvecs[0].at<double>(2);
+			prvs_pos = Point3f(pos_x, pos_y, pos_z);
+			pos_x = tvecs[0][0];
+			pos_y = tvecs[0][1];
+			pos_z = tvecs[0][2];
 
 			if (fromTop) {
 				//pos_x = pos_x;
@@ -477,59 +474,51 @@ int main(int argc, char *argv[]) {
 				pos_z = -pos_z;
 				angle = -angle;
 			}
-			prvs_pos = Point3f(pos_x, pos_y, pos_z);
+
+			printf("Detected marker %d: %f, %f, %f, %f\n", ids[0], pos_x, pos_y, pos_z, angle);
+			sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": true}", pos_x, pos_y, pos_z, angle);
+			//Sending the previously calculated datas : pos_x/y/z and angle
+			zmq_send(controller, buffer, strlen(buffer), ZMQ_DONTWAIT);
 
 			//MOTION TRACKING INITIALIZATION
-			Point2f centerPosition = getCenter(camMatrix, distCoeffs, rvecs[0], tvecs[0], markerLength);
-			Point2f size = calculateWandH(corners[0]);
-			roi = Rect2d(centerPosition.x-size.x*2.0/2.0,centerPosition.y-size.y*2.0/2.0, roundf(size.x*2.0), roundf(size.y*2.0));
-			ready = true;
-			firstPass = true;
-			position = false;
-			marker = true;
-		} else {
-			if (firstPass == true) {
-				coeffs = Point2f((prvs_trackedBox.x-320.0)/prvs_pos.x, (prvs_trackedBox.y-240.0)/prvs_pos.y);
-				lostMarkerTimeStamp = getTickCount()/(getTickFrequency()); //time in second
-				firstPass = false;
+			if (useMotionTracking) {
+				Point2f centerPosition = getCenter(camMatrix, distCoeffs, rvecs[0], tvecs[0], markerLength);
+				Point2f size = calculateWandH(corners[0]);
+				roi = Rect2d(centerPosition.x-size.x*2.0/2.0,centerPosition.y-size.y*2.0/2.0, roundf(size.x*2.0), roundf(size.y*2.0));
+				ready = true;
+				firstPass = true;
 			}
-			actualTime = getTickCount()/(getTickFrequency());
-			centeredTrackedBox = Point2f((trackedBox.x-320.0)/coeffs.x, (trackedBox.y-240.0)/coeffs.y);
-			marker = false;
-			position = true;
-		}
 
-		//Send the packet according to the value found
-		if(marker){
-			if(first_detection){
-				sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": true}", pos_x, pos_y, pos_z, angle);
-				first_detection = false;
-			}
-			else{
-			pos_x = (prvs_pos_x + pos_x)/2.0;
-			pos_y = (prvs_pos_y + pos_y)/2.0;
-			pos_z = (prvs_pos_z + pos_z)/2.0;
-			sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": true}", pos_x, pos_y, pos_z, angle);
-			}
-			printf("Detected marker %d: %f, %f, %f, %f\n", ids[0], pos_x, pos_y, pos_z, angle);
 			if (haslog) {
 				logfile << pos_x << ", " << pos_y << ", " << pos_z << ", " << angle << ", marker, 0" << endl;
 			}
-		}
-		else if(position){
-			pos_x = (prvs_pos_x + centeredTrackedBox.x)/2.0;
-			pos_y = (prvs_pos_y + centeredTrackedBox.y)/2.0;
-			pos_z = (prvs_pos_z + pos_z)/2.0;
-			if(actualTime - lostMarkerTimeStamp < 10){
-				printf("Tracked zone :     %f, %f, %f, %f\n", pos_x, pos_y, pos_z, angle);
-				sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": true}", pos_x, pos_y, pos_z, angle);
+		} else {
+			if(useMotionTracking){
+				if (firstPass == true) {
+					coeffs = Point2f((prvs_trackedBox.x-320.0)/prvs_pos.x, (prvs_trackedBox.y-240.0)/prvs_pos.y);
+					lostMarkerTimeStamp = getTickCount()/(getTickFrequency()); //time in second
+					firstPass = false;
+				}
+				actualTime = getTickCount()/(getTickFrequency());
+				centeredTrackedBox = Point2f((trackedBox.x-320.0)/coeffs.x, (trackedBox.y-240.0)/coeffs.y);
+				if(actualTime - lostMarkerTimeStamp < 10){
+					printf("Tracked zone :     %f, %f, %f, %f\n", centeredTrackedBox.x, centeredTrackedBox.y, pos_z, angle);
+					sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": true}", centeredTrackedBox.x, centeredTrackedBox.y, pos_z, angle);
+				}
+				else{
+					printf("Quad not detected during the previous 10 seconds\n");
+					sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": false}", centeredTrackedBox.x, centeredTrackedBox.y, pos_z, angle);
+				}
 			}
 			else{
-				printf("Quad not detected during the previous 10 seconds\n");
 				sprintf(buffer, "{\"pos\": [%f, %f, %f], \"angle\": %f, \"detect\": false}", pos_x, pos_y, pos_z, angle);
+				if (haslog) {
+					logfile << "0, 0, 0, 0" << endl;
+				}
 			}
+			zmq_send(controller, buffer, strlen(buffer), ZMQ_DONTWAIT);
 			if (haslog) {
-				if(actualTime - lostMarkerTimeStamp < 10){
+				if(useMotionTracking && actualTime - lostMarkerTimeStamp < 10){
 					logfile << centeredTrackedBox.x << ", " << centeredTrackedBox.y << ", " << pos_z << ", " << angle << ", motion, " << actualTime - lostMarkerTimeStamp << endl;
 				}
 				else{
@@ -537,18 +526,6 @@ int main(int argc, char *argv[]) {
 				}
 			}
 		}
-		else{
-			printf("Nothing detected yet\n");
-			sprintf(buffer, "{\"pos\": [0, 0, 0], \"angle\": 0, \"detect\": false}");
-			if(haslog){
-				logfile << "0, 0, 0, 0,stop, " << actualTime - lostMarkerTimeStamp << endl;
-			}
-		}
-		zmq_send(controller, buffer, strlen(buffer), ZMQ_DONTWAIT);
-
-		prvs_pos_x = pos_x;
-		prvs_pos_y = pos_y;
-		prvs_pos_z = pos_z;
 
 		// Calulate difference between ground and copter
 		for (int i=0; i<ids.size(); i++) {
